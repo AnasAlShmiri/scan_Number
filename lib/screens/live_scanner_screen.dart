@@ -63,20 +63,23 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      if (_controller != null) {
+        unawaited(_disposeCamera());
+      }
       return;
     }
 
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      unawaited(_disposeCamera());
-    } else if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && _controller == null) {
       unawaited(_initializeCamera());
     }
   }
 
   Future<void> _initializeCamera() async {
+    if (_controller != null) {
+      await _disposeCamera();
+    }
     if (mounted) {
       setState(() {
         _initializing = true;
