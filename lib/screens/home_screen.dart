@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../models/scan_record.dart';
 import '../services/excel_export_service.dart';
-import '../services/ocr_service.dart';
 import '../services/storage_service.dart';
+import 'live_scanner_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,8 +14,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _picker = ImagePicker();
-  final _ocrService = OcrService();
   final _storageService = StorageService();
   final _excelService = ExcelExportService();
 
@@ -31,12 +28,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadRecords();
   }
 
-  @override
-  void dispose() {
-    _ocrService.dispose();
-    super.dispose();
-  }
-
   Future<void> _loadRecords() async {
     final records = await _storageService.loadRecords();
     if (!mounted) {
@@ -49,93 +40,27 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<ImageSource?> _chooseImageSource() {
-    return showModalBottomSheet<ImageSource>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'اختر طريقة المسح',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  leading: const Icon(Icons.photo_camera_outlined),
-                  title: const Text('فتح الكاميرا'),
-                  subtitle: const Text('صوّر البطاقة مباشرة'),
-                  onTap: () => Navigator.pop(context, ImageSource.camera),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.photo_library_outlined),
-                  title: const Text('اختيار صورة'),
-                  subtitle: const Text('استخدم صورة محفوظة في الهاتف'),
-                  onTap: () => Navigator.pop(context, ImageSource.gallery),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _scanCard() async {
     if (_scanning) {
-      return;
-    }
-
-    final source = await _chooseImageSource();
-    if (source == null) {
-      return;
-    }
-
-    final image = await _picker.pickImage(
-      source: source,
-      imageQuality: 100,
-      maxWidth: 2400,
-      preferredCameraDevice: CameraDevice.rear,
-    );
-
-    if (image == null || !mounted) {
       return;
     }
 
     setState(() => _scanning = true);
 
     try {
-      final result = await _ocrService.scanImage(image.path);
+      await Navigator.of(context).push<int>(
+        MaterialPageRoute(
+          builder: (_) => const LiveScannerScreen(),
+        ),
+      );
 
       if (!mounted) {
         return;
       }
 
-      setState(() => _scanning = false);
-
-      final record = await _showRecordDialog(
-        initialLong: result.longNumber ?? '',
-        initialShort: result.shortNumber ?? '',
-        rawText: result.rawText,
-      );
-
-      if (record != null) {
-        await _addRecord(record);
-      }
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      _showMessage(
-        'تعذر قراءة الصورة. حاول التصوير بإضاءة جيدة وبشكل مستقيم.',
-        isError: true,
-      );
+      await _loadRecords();
     } finally {
-      if (mounted && _scanning) {
+      if (mounted) {
         setState(() => _scanning = false);
       }
     }
@@ -523,7 +448,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         CircularProgressIndicator(),
                         SizedBox(height: 16),
-                        Text('جاري قراءة أرقام البطاقة...'),
+                        Text('جاري فتح الماسح المباشر...'),
                       ],
                     ),
                   ),
@@ -594,8 +519,8 @@ class _HeaderCard extends StatelessWidget {
               ),
               FilledButton.tonalIcon(
                 onPressed: scanning ? null : onScan,
-                icon: const Icon(Icons.add_a_photo_outlined),
-                label: const Text('مسح'),
+                icon: const Icon(Icons.center_focus_strong),
+                label: const Text('فتح الماسح'),
               ),
             ],
           ),
@@ -729,7 +654,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'اضغط "مسح" وصوّر البطاقة. سيحاول التطبيق استخراج الرقم الطويل المكوّن من 11 رقمًا والرقم القصير المكوّن من 6 أرقام.',
+              'اضغط "فتح الماسح" ثم مرّر البطاقة أمام الكاميرا داخل المربع. سيتم التعرف على الرقم الطويل والقصير وحفظهما تلقائيًا دون تصوير.',
               textAlign: TextAlign.center,
             ),
           ],
