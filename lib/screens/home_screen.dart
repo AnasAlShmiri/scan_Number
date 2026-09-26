@@ -469,7 +469,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 padding:
                                     const EdgeInsets.fromLTRB(16, 8, 16, 16),
                                 itemCount: _records.length,
-                                separatorBuilder: (_, __) =>
+                                separatorBuilder: (_, _) =>
                                     const SizedBox(height: 8),
                                 itemBuilder: (context, index) {
                                   final record = _records[index];
