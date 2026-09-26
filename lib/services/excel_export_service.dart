@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:cross_file/cross_file.dart';
 import 'package:excel/excel.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -13,7 +12,6 @@ class ExcelExportService {
     const sheetName = 'البطاقات';
 
     final sheet = excel[sheetName];
-    sheet.rtl = true;
 
     sheet.appendRow([
       TextCellValue('الرقم الطويل'),
