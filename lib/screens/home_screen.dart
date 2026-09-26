@@ -194,24 +194,6 @@ class _HomeScreenState extends State<HomeScreen> {
     return result;
   }
 
-  Future<void> _addRecord(ScanRecord record) async {
-    final duplicate = _records.any(
-      (item) => item.longNumber == record.longNumber,
-    );
-
-    if (duplicate) {
-      _showMessage('هذا الرقم موجود مسبقًا ولم تتم إضافته.', isError: true);
-      return;
-    }
-
-    setState(() => _records = [record, ..._records]);
-    await _storageService.saveRecords(_records);
-
-    if (mounted) {
-      _showMessage('تم حفظ البطاقة مؤقتًا داخل التطبيق.');
-    }
-  }
-
   Future<void> _editRecord(ScanRecord record) async {
     final updated = await _showRecordDialog(
       initialLong: record.longNumber,
