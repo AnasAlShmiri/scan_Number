@@ -1,0 +1,29 @@
+name: scan_number
+description: تطبيق Flutter لمسح أرقام البطاقات وحفظها وتصديرها إلى Excel.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  image_picker: ^1.2.3
+  google_mlkit_text_recognition: ^0.17.1
+  shared_preferences: ^2.5.5
+  excel: ^4.0.6
+  path_provider: ^2.1.6
+  share_plus: ^13.3.0
+  cross_file: 0.3.5+5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

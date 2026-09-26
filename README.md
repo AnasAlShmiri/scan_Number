@@ -1,3 +1,118 @@
 # Scan Number
 
-Flutter application for scanning cards, extracting an 11-digit long number and a 6-digit short number, storing scanned pairs locally, reviewing/editing them, and exporting all records to Excel.
+تطبيق Flutter عربي لمسح بطاقات الأرقام بالكاميرا، استخراج رقمين محددين بواسطة OCR، حفظ جميع النتائج مؤقتًا داخل الهاتف، ثم تصدير الدفعة كاملة إلى ملف Excel واحد.
+
+## الأرقام المطلوبة
+
+التطبيق يبحث عن:
+
+- رقم طويل من **11 رقمًا** مثل: `00436434838`
+- رقم قصير من **6 أرقام** مثل: `228790`
+
+الأرقام الأخرى الموجودة على البطاقة مثل `200` أو `30` لا يتم اعتمادها.
+
+## طريقة العمل
+
+1. اضغط **مسح**.
+2. التقط صورة للبطاقة بالكاميرا أو اختر صورة من الهاتف.
+3. ML Kit OCR يقرأ النص من الصورة.
+4. التطبيق يستخرج الرقم الطويل والقصير تلقائيًا.
+5. تظهر شاشة مراجعة تسمح بتعديل الرقمين يدويًا قبل الحفظ.
+6. يتم حفظ السجل محليًا داخل التطبيق، لذلك لا يضيع عند إغلاقه.
+7. كرر المسح لجميع البطاقات.
+8. اضغط **تصدير إلى Excel** لإنشاء ملف واحد يحتوي جميع السجلات.
+
+ملف Excel يحتوي عمودين:
+
+| الرقم الطويل | الرقم القصير |
+|---|---|
+| 00436434838 | 228790 |
+
+تم حفظ القيم كنص داخل Excel حتى لا تختفي الأصفار الموجودة في بداية الرقم الطويل.
+
+## مميزات التطبيق
+
+- واجهة عربية RTL.
+- تصوير مباشر بالكاميرا أو اختيار صورة من المعرض.
+- OCR يعمل على الجهاز باستخدام Google ML Kit.
+- دعم تصحيح أخطاء OCR الشائعة مثل قراءة `0` على أنها `O`.
+- دعم الأرقام العربية `٠١٢٣٤٥٦٧٨٩`.
+- مراجعة وتعديل قبل الحفظ.
+- حفظ محلي دائم باستخدام SharedPreferences.
+- منع تكرار الرقم الطويل.
+- تعديل وحذف سجل واحد.
+- مسح جميع السجلات وبدء دفعة جديدة.
+- عداد لعدد البطاقات.
+- تصدير جميع السجلات مرة واحدة إلى `.xlsx`.
+- مشاركة ملف Excel أو حفظه من نافذة المشاركة.
+
+## التشغيل
+
+يتطلب المشروع Flutter حديثًا لأن إصدارات الحزم المستخدمة تستهدف Flutter 3.38.1 أو أحدث.
+
+بعد تنزيل المستودع:
+
+```powershell
+git clone https://github.com/AnasAlShmiri/scan_Number.git
+cd scan_Number
+flutter doctor
+flutter pub get
+```
+
+إذا كانت ملفات Android الثنائية القياسية مثل `android/gradle/wrapper/gradle-wrapper.jar` غير موجودة بعد الاستنساخ، نفّذ **مرة واحدة فقط**:
+
+```powershell
+flutter create . --platforms=android --project-name scan_number --org com.anas
+```
+
+لا تستخدم `--overwrite`. بعد ذلك:
+
+```powershell
+flutter pub get
+flutter analyze
+flutter test
+flutter run
+```
+
+## بناء APK
+
+```powershell
+flutter build apk --release
+```
+
+ستجد APK عادة في:
+
+```text
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+## ملاحظات المسح
+
+لأفضل نتيجة OCR:
+
+- اجعل البطاقة كاملة داخل الصورة.
+- استخدم إضاءة جيدة.
+- تجنب الاهتزاز والانعكاس.
+- صوّر البطاقة بشكل مستقيم قدر الإمكان.
+- راجع الرقمين دائمًا قبل الضغط على حفظ.
+
+## بنية المشروع
+
+```text
+lib/
+  main.dart
+  models/
+    scan_record.dart
+  screens/
+    home_screen.dart
+  services/
+    ocr_service.dart
+    storage_service.dart
+    excel_export_service.dart
+test/
+  ocr_service_test.dart
+```
+
+## الخصوصية
+
+قراءة الأرقام تتم محليًا على الجهاز عبر ML Kit، والسجلات تحفظ محليًا في التطبيق إلى أن يقوم المستخدم بحذفها.
