@@ -12,7 +12,7 @@
 أوقف أي تشغيل آخر للمشروع أولًا. من PowerShell داخل مجلد المشروع:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-offline.ps1 -Install -DeviceId 5b15887e
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build-offline.ps1 -ProjectPath "$PWD" -Install -DeviceId 5b15887e
 ```
 
 خيار ExecutionPolicy يخص هذه العملية فقط، ولا يغيّر سياسة Windows المحفوظة.

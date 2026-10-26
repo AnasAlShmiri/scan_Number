@@ -7,6 +7,15 @@ on:
     branches: [main]
 
 jobs:
+  windows-offline-helper:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check offline helper with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tools\test-offline-paths.ps1
+
   analyze-and-test:
     runs-on: ubuntu-latest
     steps:

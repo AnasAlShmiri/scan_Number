@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ProjectPath = (Split-Path $PSScriptRoot -Parent),
+    [string]$ProjectPath = '',
     [string]$GradleCachePath = $env:GRADLE_USER_HOME,
     [switch]$Install,
     [string]$DeviceId
@@ -8,6 +8,20 @@ param(
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+
+# Windows PowerShell may not populate PSScriptRoot while evaluating parameter
+# defaults. Resolve it inside the script body, after parameter binding instead.
+if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $ProjectPath = Split-Path -Path $PSScriptRoot -Parent
+    }
+    elseif (Test-Path (Join-Path (Get-Location).Path 'pubspec.yaml')) {
+        $ProjectPath = (Get-Location).Path
+    }
+    else {
+        throw 'Cannot determine the project directory. Specify -ProjectPath with the full project path.'
+    }
+}
 
 function Invoke-Checked {
     param([string]$Command, [string[]]$CommandArguments, [string]$Step)
@@ -27,7 +41,7 @@ if ($Install -and [string]::IsNullOrWhiteSpace($DeviceId)) {
 }
 
 $onWindows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
-$flutterCommand = (Get-Command flutter -ErrorAction Stop).Source
+$flutterCommand = (Get-Command flutter -CommandType Application -ErrorAction Stop | Select-Object -First 1).Path
 $flutterRoot = Split-Path (Split-Path $flutterCommand -Parent) -Parent
 $dartBinary = if ($onWindows) { 'dart.exe' } else { 'dart' }
 $gradleBinary = if ($onWindows) { 'gradle.bat' } else { 'gradle' }
