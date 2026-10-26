@@ -19,9 +19,8 @@ class StorageService {
       final decoded = jsonDecode(raw) as List<dynamic>;
       return decoded
           .map(
-            (item) => ScanRecord.fromJson(
-              Map<String, dynamic>.from(item as Map),
-            ),
+            (item) =>
+                ScanRecord.fromJson(Map<String, dynamic>.from(item as Map)),
           )
           .toList();
     } catch (_) {
@@ -34,7 +33,28 @@ class StorageService {
     final payload = jsonEncode(
       records.map((record) => record.toJson()).toList(),
     );
-    await preferences.setString(_recordsKey, payload);
+    try {
+      final saved = await preferences.setString(_recordsKey, payload);
+      if (!saved) {
+        throw StateError('تعذر حفظ البطاقات على الجهاز');
+      }
+    } catch (_) {
+      // The legacy API updates its cache even when the platform write fails.
+      // Discard that cache so a retry is not mistaken for a saved duplicate.
+      await preferences.reload();
+      rethrow;
+    }
+  }
+
+  Future<List<ScanRecord>> addRecord(ScanRecord record) async {
+    final records = await loadRecords();
+    if (records.any((item) => item.longNumber == record.longNumber)) {
+      return records;
+    }
+
+    final next = [record, ...records];
+    await saveRecords(next);
+    return next;
   }
 
   Future<void> clearRecords() async {

@@ -9,6 +9,7 @@ import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart
 import '../models/scan_record.dart';
 import '../services/ocr_service.dart';
 import '../services/storage_service.dart';
+import '../services/text_export_service.dart';
 
 class LiveScannerScreen extends StatefulWidget {
   const LiveScannerScreen({super.key});
@@ -19,32 +20,36 @@ class LiveScannerScreen extends StatefulWidget {
 
 class _LiveScannerScreenState extends State<LiveScannerScreen>
     with WidgetsBindingObserver {
-  static const _frameInterval = Duration(milliseconds: 500);
-  static const _saveCooldown = Duration(milliseconds: 1400);
+  // Process fresh frames frequently, while keeping at most one OCR task active.
+  static const _frameInterval = Duration(milliseconds: 120);
   static const _requiredStableReads = 2;
 
   final _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
   final _storageService = StorageService();
+  final _textService = TextExportService();
 
   CameraController? _controller;
   CameraDescription? _camera;
   List<ScanRecord> _records = [];
+  final Set<String> _savedLongNumbers = {};
 
   bool _initializing = true;
   bool _processingFrame = false;
   bool _flashOn = false;
+  bool _paused = false;
+  bool _exporting = false;
+  bool _closing = false;
+  Future<void>? _frameTask;
   String? _errorMessage;
 
   String? _detectedLong;
   String? _detectedShort;
   String? _candidateKey;
   int _candidateHits = 0;
-  String? _lastSavedKey;
   String _statusText = 'مرّر البطاقة داخل المربع وسيتم المسح تلقائيًا';
   int _sessionSaved = 0;
 
   DateTime _lastFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
-  DateTime _cooldownUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   static const Map<DeviceOrientation, int> _orientations = {
     DeviceOrientation.portraitUp: 0,
@@ -88,6 +93,9 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
 
     try {
       _records = await _storageService.loadRecords();
+      _savedLongNumbers
+        ..clear()
+        ..addAll(_records.map((record) => record.longNumber));
 
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
@@ -97,15 +105,17 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
       final backCameras = cameras
           .where((camera) => camera.lensDirection == CameraLensDirection.back)
           .toList();
-      final selectedCamera =
-          backCameras.isNotEmpty ? backCameras.first : cameras.first;
+      final selectedCamera = backCameras.isNotEmpty
+          ? backCameras.first
+          : cameras.first;
 
       final controller = CameraController(
         selectedCamera,
         ResolutionPreset.medium,
         enableAudio: false,
-        imageFormatGroup:
-            Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
       );
 
       await controller.initialize();
@@ -177,46 +187,49 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
   }
 
   void _onCameraImage(CameraImage image) {
-    if (_processingFrame || !mounted) {
+    if (_processingFrame || _paused || _closing || !mounted) {
       return;
     }
 
     final now = DateTime.now();
-    if (now.isBefore(_cooldownUntil) ||
-        now.difference(_lastFrameAt) < _frameInterval) {
+    if (now.difference(_lastFrameAt) < _frameInterval) {
       return;
     }
 
     _processingFrame = true;
     _lastFrameAt = now;
-    unawaited(_processCameraImage(image));
+    _frameTask = _processCameraImage(image);
+    unawaited(_frameTask);
   }
 
   Future<void> _processCameraImage(CameraImage image) async {
     try {
       final inputImage = _inputImageFromCameraImage(image);
       if (inputImage == null) {
+        _candidateKey = null;
+        _candidateHits = 0;
         return;
       }
 
       final recognizedText = await _recognizer.processImage(inputImage);
       final parsed = OcrService.extractFromRawText(recognizedText.text);
 
-      if (!mounted) {
+      if (!mounted || _paused || _closing) {
         return;
       }
 
-      setState(() {
-        _detectedLong = parsed.longNumber;
-        _detectedShort = parsed.shortNumber;
-        if (!parsed.isComplete) {
-          _statusText = 'ثبّت البطاقة قليلًا داخل المربع';
-        }
-      });
+      if (_detectedLong != parsed.longNumber ||
+          _detectedShort != parsed.shortNumber) {
+        setState(() {
+          _detectedLong = parsed.longNumber;
+          _detectedShort = parsed.shortNumber;
+        });
+      }
 
       if (!parsed.isComplete) {
         _candidateKey = null;
         _candidateHits = 0;
+        _setStatusText('ثبّت البطاقة قليلًا داخل المربع');
         return;
       }
 
@@ -224,7 +237,10 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
       final shortNumber = parsed.shortNumber!;
       final key = '$longNumber|$shortNumber';
 
-      if (key == _lastSavedKey) {
+      if (_savedLongNumbers.contains(longNumber)) {
+        _candidateKey = null;
+        _candidateHits = 0;
+        _setStatusText('هذه البطاقة محفوظة — مرّر البطاقة التالية');
         return;
       }
 
@@ -235,24 +251,25 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
         _candidateHits = 1;
       }
 
-      if (mounted) {
-        setState(() {
-          _statusText =
-              'تم التعرف على الرقمين ($_candidateHits/$_requiredStableReads)';
-        });
-      }
+      _setStatusText(
+        'تم التعرف على الرقمين ($_candidateHits/$_requiredStableReads)',
+      );
 
       if (_candidateHits >= _requiredStableReads) {
-        await _saveDetectedCard(longNumber, shortNumber, key);
+        await _saveDetectedCard(longNumber, shortNumber);
       }
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _statusText = 'استمر في تمرير البطاقة داخل المربع';
-        });
-      }
+      _candidateKey = null;
+      _candidateHits = 0;
+      _setStatusText('استمر في تمرير البطاقة داخل المربع');
     } finally {
       _processingFrame = false;
+    }
+  }
+
+  void _setStatusText(String text) {
+    if (mounted && _statusText != text) {
+      setState(() => _statusText = text);
     }
   }
 
@@ -276,8 +293,7 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
       }
 
       if (camera.lensDirection == CameraLensDirection.front) {
-        rotationCompensation =
-            (sensorOrientation + rotationCompensation) % 360;
+        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
       } else {
         rotationCompensation =
             (sensorOrientation - rotationCompensation + 360) % 360;
@@ -315,29 +331,9 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
     );
   }
 
-  Future<void> _saveDetectedCard(
-    String longNumber,
-    String shortNumber,
-    String key,
-  ) async {
-    final duplicate = _records.any(
-      (record) => record.longNumber == longNumber,
-    );
-
+  Future<void> _saveDetectedCard(String longNumber, String shortNumber) async {
     _candidateKey = null;
     _candidateHits = 0;
-    _lastSavedKey = key;
-    _cooldownUntil = DateTime.now().add(_saveCooldown);
-
-    if (duplicate) {
-      if (mounted) {
-        setState(() {
-          _statusText = 'هذه البطاقة محفوظة مسبقًا';
-        });
-      }
-      await HapticFeedback.selectionClick();
-      return;
-    }
 
     final record = ScanRecord(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
@@ -346,18 +342,94 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
       createdAt: DateTime.now(),
     );
 
-    _records = [record, ..._records];
-    await _storageService.saveRecords(_records);
-    await HapticFeedback.mediumImpact();
+    List<ScanRecord> savedRecords;
+    try {
+      // Append to the persisted batch so opening the scanner never replaces it.
+      savedRecords = await _storageService.addRecord(record);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _statusText =
+              'تعذر حفظ البطاقة. ثبّتها أمام الكاميرا لإعادة المحاولة';
+        });
+      }
+      return;
+    }
+
+    // Successful saves are remembered immediately, so the next card can be
+    // scanned without a timed cooldown or repeated storage reads for this card.
+    _savedLongNumbers.addAll(savedRecords.map((record) => record.longNumber));
+    final added = savedRecords.any((item) => item.id == record.id);
 
     if (!mounted) {
       return;
     }
 
     setState(() {
-      _sessionSaved++;
-      _statusText = '✓ تم الحفظ تلقائيًا — مرّر البطاقة التالية';
+      _records = savedRecords;
+      if (added) {
+        _sessionSaved++;
+      }
+      _statusText = added
+          ? '✓ أُضيفت البطاقة إلى القائمة — مرّر البطاقة التالية'
+          : 'هذه البطاقة محفوظة مسبقًا — مرّر البطاقة التالية';
     });
+    // Feedback is optional; its failure must not make a successful save fail.
+    unawaited(HapticFeedback.mediumImpact().catchError((Object _) {}));
+  }
+
+  void _toggleScanning() {
+    setState(() {
+      _paused = !_paused;
+      _candidateKey = null;
+      _candidateHits = 0;
+      _statusText = _paused
+          ? 'المسح متوقف مؤقتًا — البطاقات محفوظة في القائمة'
+          : 'مرّر البطاقة التالية وسيتم حفظها تلقائيًا';
+    });
+  }
+
+  Future<void> _exportText() async {
+    if (_records.isEmpty || _exporting || _closing) {
+      return;
+    }
+
+    final wasPaused = _paused;
+    setState(() {
+      _exporting = true;
+      _paused = true;
+      _candidateKey = null;
+      _candidateHits = 0;
+    });
+    try {
+      // Include a save that was already in progress before export was tapped.
+      await _frameTask;
+      final file = await _textService.createTextFile(
+        _records.reversed.toList(),
+      );
+      if (!mounted || _closing) {
+        return;
+      }
+      await _textService.shareFile(file);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تعذر تصدير الملف النصي. حاول مرة أخرى.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+          _paused = wasPaused;
+          _statusText = wasPaused
+              ? 'المسح متوقف مؤقتًا — البطاقات محفوظة في القائمة'
+              : 'مرّر البطاقة التالية وسيتم حفظها تلقائيًا';
+        });
+      }
+    }
   }
 
   Future<void> _toggleFlash() async {
@@ -382,7 +454,12 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
   }
 
   Future<void> _closeScanner() async {
+    if (_closing || _exporting) {
+      return;
+    }
+    setState(() => _closing = true);
     await _disposeCamera();
+    await _frameTask;
     if (mounted) {
       Navigator.pop(context, _sessionSaved);
     }
@@ -411,8 +488,9 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
           child: Column(
             children: [
               _buildTopBar(),
-              Expanded(child: _buildCameraArea()),
+              Expanded(flex: 3, child: _buildCameraArea()),
               _buildStatusArea(),
+              Expanded(flex: 2, child: _buildSavedRecords()),
             ],
           ),
         ),
@@ -426,7 +504,7 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
       child: Row(
         children: [
           IconButton(
-            onPressed: _closeScanner,
+            onPressed: _closing || _exporting ? null : _closeScanner,
             color: Colors.white,
             icon: const Icon(Icons.arrow_back),
             tooltip: 'رجوع',
@@ -441,6 +519,12 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
                 fontWeight: FontWeight.bold,
               ),
             ),
+          ),
+          IconButton(
+            onPressed: _exporting || _closing ? null : _toggleScanning,
+            color: Colors.white,
+            icon: Icon(_paused ? Icons.play_arrow : Icons.pause),
+            tooltip: _paused ? 'استئناف المسح التلقائي' : 'إيقاف المسح مؤقتًا',
           ),
           IconButton(
             onPressed: _toggleFlash,
@@ -467,8 +551,11 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.camera_alt_outlined,
-                  color: Colors.white70, size: 56),
+              const Icon(
+                Icons.camera_alt_outlined,
+                color: Colors.white70,
+                size: 56,
+              ),
               const SizedBox(height: 16),
               Text(
                 _errorMessage!,
@@ -499,10 +586,7 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
         child: Stack(
           fit: StackFit.expand,
           children: [
-            ColoredBox(
-              color: Colors.black,
-              child: CameraPreview(controller),
-            ),
+            ColoredBox(color: Colors.black, child: CameraPreview(controller)),
             Container(color: Colors.black.withValues(alpha: 0.08)),
             Center(
               child: FractionallySizedBox(
@@ -518,10 +602,7 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
                     ),
                     borderRadius: BorderRadius.circular(18),
                     boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black45,
-                        blurRadius: 8,
-                      ),
+                      BoxShadow(color: Colors.black45, blurRadius: 8),
                     ],
                   ),
                   child: Stack(
@@ -533,8 +614,9 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
                           child: DecoratedBox(
                             decoration: BoxDecoration(
                               color: Colors.black54,
-                              borderRadius:
-                                  BorderRadius.all(Radius.circular(10)),
+                              borderRadius: BorderRadius.all(
+                                Radius.circular(10),
+                              ),
                             ),
                             child: Padding(
                               padding: EdgeInsets.symmetric(
@@ -573,8 +655,10 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 7,
+                  ),
                   child: Text(
                     'تم الحفظ: $_sessionSaved',
                     style: const TextStyle(
@@ -596,7 +680,7 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 20),
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
       decoration: const BoxDecoration(
         color: Color(0xFF111315),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -631,11 +715,99 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          const Text(
-            'لا تحتاج إلى التصوير أو الضغط على زر. ثبّت البطاقة لحظة قصيرة فقط.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white60, fontSize: 12),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSavedRecords() {
+    return ColoredBox(
+      color: const Color(0xFF111315),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'البطاقات المحفوظة (${_records.length})',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _records.isEmpty || _exporting || _closing
+                      ? null
+                      : _exportText,
+                  icon: _exporting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.description_outlined),
+                  label: const Text('تصدير TXT'),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _records.isEmpty
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(12),
+                      child: Text(
+                        'وجّه الكاميرا نحو الكرت. ستُضاف كل بطاقة هنا تلقائيًا دون حذف السابقة.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    itemCount: _records.length,
+                    itemBuilder: (context, index) {
+                      final record = _records[index];
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.check_circle,
+                              color: Colors.greenAccent,
+                              size: 18,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${_records.length - index}',
+                              style: const TextStyle(color: Colors.white60),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                record.longNumber,
+                                textDirection: TextDirection.ltr,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                record.shortNumber,
+                                textDirection: TextDirection.ltr,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
@@ -644,10 +816,7 @@ class _LiveScannerScreenState extends State<LiveScannerScreen>
 }
 
 class _DetectedValue extends StatelessWidget {
-  const _DetectedValue({
-    required this.title,
-    required this.value,
-  });
+  const _DetectedValue({required this.title, required this.value});
 
   final String title;
   final String value;

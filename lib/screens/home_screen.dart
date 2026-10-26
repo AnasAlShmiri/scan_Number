@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/scan_record.dart';
 import '../services/excel_export_service.dart';
 import '../services/storage_service.dart';
+import '../services/text_export_service.dart';
 import 'live_scanner_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -16,6 +17,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _storageService = StorageService();
   final _excelService = ExcelExportService();
+  final _textService = TextExportService();
 
   List<ScanRecord> _records = [];
   bool _loading = true;
@@ -48,11 +50,9 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _scanning = true);
 
     try {
-      await Navigator.of(context).push<int>(
-        MaterialPageRoute(
-          builder: (_) => const LiveScannerScreen(),
-        ),
-      );
+      await Navigator.of(
+        context,
+      ).push<int>(MaterialPageRoute(builder: (_) => const LiveScannerScreen()));
 
       if (!mounted) {
         return;
@@ -172,7 +172,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   Navigator.pop(
                     dialogContext,
                     ScanRecord(
-                      id: existing?.id ??
+                      id:
+                          existing?.id ??
                           DateTime.now().microsecondsSinceEpoch.toString(),
                       longNumber: longController.text,
                       shortNumber: shortController.text,
@@ -207,8 +208,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final duplicate = _records.any(
-      (item) =>
-          item.id != updated.id && item.longNumber == updated.longNumber,
+      (item) => item.id != updated.id && item.longNumber == updated.longNumber,
     );
 
     if (duplicate) {
@@ -329,6 +329,31 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _exportText() async {
+    if (_records.isEmpty || _exporting) {
+      return;
+    }
+
+    setState(() => _exporting = true);
+    try {
+      final file = await _textService.createTextFile(
+        _records.reversed.toList(),
+      );
+      if (!mounted) {
+        return;
+      }
+      await _textService.shareFile(file);
+    } catch (_) {
+      if (mounted) {
+        _showMessage('تعذر تصدير الملف النصي. حاول مرة أخرى.', isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _exporting = false);
+      }
+    }
+  }
+
   void _showMessage(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -336,8 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
         SnackBar(
           content: Text(message),
           behavior: SnackBarBehavior.floating,
-          backgroundColor:
-              isError ? Theme.of(context).colorScheme.error : null,
+          backgroundColor: isError ? Theme.of(context).colorScheme.error : null,
         ),
       );
   }
@@ -373,8 +397,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: _records.isEmpty
                             ? const _EmptyState()
                             : ListView.separated(
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  8,
+                                  16,
+                                  16,
+                                ),
                                 itemCount: _records.length,
                                 separatorBuilder: (_, _) =>
                                     const SizedBox(height: 8),
@@ -391,28 +419,31 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                        child: SizedBox(
-                          width: double.infinity,
-                          height: 54,
-                          child: FilledButton.icon(
-                            onPressed: _records.isEmpty || _exporting
-                                ? null
-                                : _exportExcel,
-                            icon: _exporting
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.table_view_outlined),
-                            label: Text(
-                              _exporting
-                                  ? 'جاري إنشاء الملف...'
-                                  : 'تصدير ${_records.length} سجل إلى Excel',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: _records.isEmpty || _exporting
+                                  ? null
+                                  : _exportText,
+                              icon: const Icon(Icons.description_outlined),
+                              label: Text(
+                                _exporting
+                                    ? 'جاري التصدير...'
+                                    : 'تصدير ${_records.length} بطاقة إلى ملف نصي TXT',
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: _records.isEmpty || _exporting
+                                  ? null
+                                  : _exportExcel,
+                              icon: const Icon(Icons.table_view_outlined),
+                              label: Text(
+                                'تصدير ${_records.length} سجل إلى Excel',
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -486,15 +517,14 @@ class _HeaderCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'السجلات المحفوظة مؤقتًا',
+                      'البطاقات المحفوظة على الجهاز',
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       '$count بطاقة',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
@@ -533,18 +563,13 @@ class _RecordCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
         child: Row(
           children: [
-            CircleAvatar(
-              child: Text('$index'),
-            ),
+            CircleAvatar(child: Text('$index')),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'الرقم الطويل',
-                    style: TextStyle(fontSize: 12),
-                  ),
+                  const Text('الرقم الطويل', style: TextStyle(fontSize: 12)),
                   Directionality(
                     textDirection: TextDirection.ltr,
                     child: SelectableText(
