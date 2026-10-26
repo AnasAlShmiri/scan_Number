@@ -45,3 +45,7 @@ jobs:
 
       - name: Build debug APK
         run: flutter build apk --debug
+
+      - name: Build offline using populated caches
+        shell: pwsh
+        run: ./tools/build-offline.ps1 -ProjectPath "$PWD"

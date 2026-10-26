@@ -110,6 +110,17 @@ if ($null -eq $androidSdk) {
     throw 'Android SDK not found. Set ANDROID_HOME to your existing SDK directory; no SDK installer will be run.'
 }
 
+$appSettings = Get-Content -LiteralPath (Join-Path $androidRoot 'settings.gradle.kts') -Raw
+$agpMatch = [regex]::Match($appSettings, 'id\("com\.android\.application"\)\s+version\s+"([0-9.]+)"')
+if (-not $agpMatch.Success) {
+    throw 'Cannot determine the application Android Gradle Plugin version from settings.gradle.kts.'
+}
+$appAgpVersion = $agpMatch.Groups[1].Value
+$offlineInit = Join-Path $PSScriptRoot 'gradle-offline.init.gradle'
+if (-not (Test-Path -LiteralPath $offlineInit)) {
+    throw 'gradle-offline.init.gradle is missing. Keep it beside build-offline.ps1.'
+}
+
 $environmentChanges = @{
     'CI' = 'true'
     'FLUTTER_SUPPRESS_ANALYTICS' = 'true'
@@ -128,6 +139,7 @@ Push-Location $projectRoot
 try {
     Write-Host "Offline build: existing Flutter at $flutterRoot"
     Write-Host "Using cached Gradle $($selectedGradle.Version) at $($selectedGradle.Path)"
+    Write-Host "Plugin libraries use the app's Android Gradle Plugin $appAgpVersion in offline mode."
     Write-Host "Pub may print 'Downloading packages...' as a generic heading; --offline only uses cached packages."
     Invoke-Checked $flutterCommand @('--no-version-check', '--suppress-analytics', 'pub', 'get', '--offline') 'Offline package resolution'
 
@@ -135,7 +147,9 @@ try {
     # SDK auto-installation is also disabled. Only the phone's ARM64 ABI is built.
     Invoke-Checked $selectedGradle.Path @(
         '--offline', '--no-daemon', '--max-workers=2', '--console=plain',
+        '--init-script', $offlineInit,
         '-p', $androidRoot, 'assembleDebug',
+        "-PscanNumberOfflineAgpVersion=$appAgpVersion",
         '-Ptarget-platform=android-arm64',
         "-Ptarget=$projectRoot/lib/main.dart",
         '-Pandroid.builder.sdkDownload=false',
