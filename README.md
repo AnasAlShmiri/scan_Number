@@ -73,6 +73,9 @@ flutter run
 
 ## بناء APK
 
+إذا كان الإنترنت محدودًا وتريد تعديل الكود والبناء باستخدام الحزم الموجودة
+على جهازك، راجع [دليل البناء بدون إنترنت](docs/offline-build.md).
+
 ```powershell
 flutter build apk --release
 ```
