@@ -121,6 +121,24 @@ if (-not (Test-Path -LiteralPath $offlineInit)) {
     throw 'gradle-offline.init.gradle is missing. Keep it beside build-offline.ps1.'
 }
 
+$offlineRepository = Join-Path $projectRoot '.offline/maven'
+$localRepositoryArguments = @()
+if (Test-Path -LiteralPath $offlineRepository) {
+    $manifestFile = Join-Path $PSScriptRoot 'offline-artifacts.json'
+    $manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
+    foreach ($artifact in $manifest.artifacts) {
+        $artifactFile = Join-Path $offlineRepository $artifact.path
+        if (-not (Test-Path -LiteralPath $artifactFile)) {
+            throw "Offline bundle is incomplete: $($artifact.path). Extract the complete kotlin-reflect-offline.zip into the project directory."
+        }
+        $actualHash = (Get-FileHash -LiteralPath $artifactFile -Algorithm SHA256).Hash
+        if ($actualHash -ne $artifact.sha256) {
+            throw "Offline artifact checksum failed: $($artifact.path). This file will not be used."
+        }
+    }
+    $localRepositoryArguments = @("-PscanNumberOfflineMavenRepo=$offlineRepository")
+}
+
 $environmentChanges = @{
     'CI' = 'true'
     'FLUTTER_SUPPRESS_ANALYTICS' = 'true'
@@ -140,12 +158,15 @@ try {
     Write-Host "Offline build: existing Flutter at $flutterRoot"
     Write-Host "Using cached Gradle $($selectedGradle.Version) at $($selectedGradle.Path)"
     Write-Host "Plugin libraries use the app's Android Gradle Plugin $appAgpVersion in offline mode."
+    if ($localRepositoryArguments.Count -gt 0) {
+        Write-Host "Verified local artifact bundle: $offlineRepository"
+    }
     Write-Host "Pub may print 'Downloading packages...' as a generic heading; --offline only uses cached packages."
     Invoke-Checked $flutterCommand @('--no-version-check', '--suppress-analytics', 'pub', 'get', '--offline') 'Offline package resolution'
 
     # Directly invoke an installed Gradle, avoiding wrapper downloads. Android
     # SDK auto-installation is also disabled. Only the phone's ARM64 ABI is built.
-    Invoke-Checked $selectedGradle.Path @(
+    $buildArguments = @(
         '--offline', '--no-daemon', '--max-workers=2', '--console=plain',
         '--init-script', $offlineInit,
         '-p', $androidRoot, 'assembleDebug',
@@ -154,7 +175,8 @@ try {
         "-Ptarget=$projectRoot/lib/main.dart",
         '-Pandroid.builder.sdkDownload=false',
         '-Porg.gradle.java.installations.auto-download=false'
-    ) 'Offline Android build'
+    ) + $localRepositoryArguments
+    Invoke-Checked $selectedGradle.Path $buildArguments 'Offline Android build'
 
     $apk = Join-Path $projectRoot 'build/app/outputs/flutter-apk/app-debug.apk'
     if (-not (Test-Path $apk)) {
